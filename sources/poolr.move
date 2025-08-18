@@ -7,6 +7,8 @@ use sui::event;
 use sui::table::{Self, Table};
 use usdc::usdc::USDC;
 
+const ENotPoolInitiator: u64 = 500;
+
 public enum THRESHOLD_TYPE has store {
     COUNT,
     PERCENTAGE,
@@ -107,11 +109,10 @@ public fun create_pool(
     transfer::share_object(pool)
 }
 
-public fun add_contributor_to_pool(
-    &mut Pool,
-    user_address: address
-) {
-    
+public fun add_contributor_to_pool(ctx: &mut TxContext, pool: &mut Pool, user_address: address) {
+    assert!(pool.initiator == ctx.sender(), ENotPoolInitiator);
+
+    vector::push_back(&mut pool.contributors, user_address);
 }
 
 public fun join_pool() {}
