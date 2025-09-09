@@ -8,6 +8,9 @@ use sui::table::{Self, Table};
 use usdc::usdc::USDC;
 
 const ENotPoolInitiator: u64 = 500;
+const EInvalidThreshold: u64 = 501;
+const EInvalidStatus: u64 = 502;
+const EInvalidVisibility: u64 = 503;
 
 public enum THRESHOLD_TYPE has store {
     COUNT,
@@ -53,9 +56,58 @@ public struct Pool has key {
     deadline_ms: u64,
 }
 
+public struct PoolInitiatorCap has key {
+    id: UID,
+}
+
 public struct PoolCreatedEvent has copy, drop {
     pool_id: ID,
     initiator: address,
+}
+
+public fun get_pool_threshold_type(threshold: String): THRESHOLD_TYPE {
+    if (threshold != b"COUNT".to_string() && threshold != b"PERCENTAGE".to_string()) {
+        abort EInvalidThreshold
+    };
+
+    if (threshold == b"COUNT".to_string()) {
+        THRESHOLD_TYPE::COUNT
+    } else {
+        THRESHOLD_TYPE::PERCENTAGE
+    }
+}
+
+public fun get_pool_status_type(status: String): POOL_STATUS {
+    if (
+        status != b"OPEN".to_string() && status != b"FUNDED".to_string() && status != b"VOTING".to_string() && status != b"EXECUTED".to_string() && status != b"REFUNDED".to_string() && status != b"REUSED".to_string()
+    ) {
+        abort EInvalidStatus
+    };
+
+    if (status == b"OPEN".to_string()) {
+        POOL_STATUS::OPEN
+    } else if (status == b"FUNDED".to_string()) {
+        POOL_STATUS::FUNDED
+    } else if (status == b"VOTING".to_string()) {
+        POOL_STATUS::VOTING
+    } else if (status == b"EXECUTED".to_string()) {
+        POOL_STATUS::EXECUTED
+    } else if (status == b"REFUNDED".to_string()) {
+        POOL_STATUS::REFUNDED
+    } else {
+        POOL_STATUS::REUSED
+    }
+}
+
+public fun get_pool_visibility_type(visibility: String): POOL_VISIBILITY {
+    if (visibility != b"PRIVATE".to_string() && visibility != b"PUBLIC".to_string()) {
+        abort EInvalidVisibility
+    };
+    if (visibility == b"PRIVATE".to_string()) {
+        POOL_VISIBILITY::PRIVATE
+    } else {
+        POOL_VISIBILITY::PUBLIC
+    }
 }
 
 public fun create_pool(
@@ -94,6 +146,9 @@ public fun create_pool(
         visibility,
     };
 
+    let poolInitiatorCap = PoolInitiatorCap {
+        id: object::new(ctx),
+    };
     let pool_escrow = PoolEscrow {
         id: object::new(ctx),
         value: balance::zero<USDC>(),
@@ -106,7 +161,12 @@ public fun create_pool(
         initiator: ctx.sender(),
     });
 
-    transfer::share_object(pool)
+    transfer::share_object(pool);
+    transfer::transfer(poolInitiatorCap, ctx.sender())
+}
+
+public fun get_pool_initiator(pool: &Pool): address {
+    pool.initiator
 }
 
 public fun add_contributor_to_pool(ctx: &mut TxContext, pool: &mut Pool, user_address: address) {
