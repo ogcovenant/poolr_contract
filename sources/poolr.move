@@ -7,7 +7,6 @@ use sui::event;
 use sui::table::{Self, Table};
 use usdc::usdc::USDC;
 
-const ENotPoolInitiator: u64 = 500;
 const EInvalidThreshold: u64 = 501;
 const EInvalidStatus: u64 = 502;
 const EInvalidVisibility: u64 = 503;
@@ -169,9 +168,11 @@ public fun get_pool_initiator(pool: &Pool): address {
     pool.initiator
 }
 
-public fun add_contributor_to_pool(ctx: &mut TxContext, pool: &mut Pool, user_address: address) {
-    assert!(pool.initiator == ctx.sender(), ENotPoolInitiator);
+public fun get_pool_contributors(pool: &Pool): vector<address> {
+    pool.contributors
+}
 
+public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &PoolInitiatorCap) {
     vector::push_back(&mut pool.contributors, user_address);
 }
 
