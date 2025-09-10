@@ -10,6 +10,7 @@ use usdc::usdc::USDC;
 const EInvalidThreshold: u64 = 501;
 const EInvalidStatus: u64 = 502;
 const EInvalidVisibility: u64 = 503;
+const ECannotJoinPrivatePool: u64 = 504;
 
 public enum THRESHOLD_TYPE has store {
     COUNT,
@@ -25,7 +26,7 @@ public enum POOL_STATUS has store {
     REUSED,
 }
 
-public enum POOL_VISIBILITY has store {
+public enum POOL_VISIBILITY has drop, store {
     PRIVATE,
     PUBLIC,
 }
@@ -114,11 +115,11 @@ public fun create_pool(
     description: String,
     recipient: address,
     target_amount: u64,
-    threshold_type: THRESHOLD_TYPE,
+    threshold_type: String,
     threshold_value: u8,
     threshold_contribution: Option<u64>,
     deadline_ms: u64,
-    visibility: POOL_VISIBILITY,
+    visibility: String,
 ) {
     let mut contributors = vector::empty<address>();
     vector::push_back(&mut contributors, ctx.sender());
@@ -134,13 +135,13 @@ public fun create_pool(
         contributors,
         recipient,
         target_amount,
-        threshold_type,
+        threshold_type: get_pool_threshold_type(threshold_type),
         threshold_value,
         threshold_contribution,
         status: POOL_STATUS::OPEN,
         voters,
         deadline_ms,
-        visibility,
+        visibility: get_pool_visibility_type(visibility),
     };
 
     let poolInitiatorCap = PoolInitiatorCap {
@@ -176,11 +177,17 @@ public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &P
     }
 }
 
-public fun join_pool() {}
+public fun join_pool(ctx: &mut TxContext, pool: &mut Pool) {
+    assert!(&pool.visibility == POOL_VISIBILITY::PUBLIC, ECannotJoinPrivatePool);
+
+    if (!table::contains(&pool.contributors, ctx.sender())) {
+        table::add(&mut pool.contributors, ctx.sender(), 0);
+    }
+}
 
 public fun remove_contributor_from_pool() {}
 
-public fun convert_contributor_to_adomin() {}
+public fun convert_contributor_to_admin() {}
 
 public fun contribute_to_pool() {}
 
