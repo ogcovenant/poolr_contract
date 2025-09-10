@@ -39,7 +39,6 @@ fun test_pool_creation() {
 }
 
 #[test]
-// #[allow(implicit_const_copy)]
 fun test_contributor_addition() {
     let mut scenario = ts::begin(BOB);
     let test_pool;
@@ -78,7 +77,7 @@ fun test_contributor_addition() {
 }
 
 #[test]
-fun test_join_pool_as_contributor() {
+fun test_join_pool() {
     let mut scenario = ts::begin(BOB);
     let test_pool;
 
@@ -112,3 +111,6 @@ fun test_join_pool_as_contributor() {
     };
     ts::end(scenario);
 }
+
+#[test]
+fun test_remove_contributor() {}

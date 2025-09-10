@@ -2,6 +2,7 @@ module poolr::poolr;
 
 use std::string::String;
 use sui::balance::{Self, Balance};
+use sui::coin;
 use sui::dynamic_object_field as dof;
 use sui::event;
 use sui::table::{Self, Table};
@@ -11,6 +12,8 @@ const EInvalidThreshold: u64 = 501;
 const EInvalidStatus: u64 = 502;
 const EInvalidVisibility: u64 = 503;
 const ECannotJoinPrivatePool: u64 = 504;
+const EaddressAlreadyAContributor: u64 = 505;
+const EAddressNotAContributor: u64 = 506;
 
 public enum THRESHOLD_TYPE has store {
     COUNT,
@@ -62,6 +65,21 @@ public struct PoolInitiatorCap has key {
 public struct PoolCreatedEvent has copy, drop {
     pool_id: ID,
     initiator: address,
+}
+
+public struct ContributorAddedToPoolEvent has copy, drop {
+    pool_id: ID,
+    user_address: address,
+}
+
+public struct ContributorJoinedPoolEvent has copy, drop {
+    pool_id: ID,
+    user_address: address,
+}
+
+public struct ContributorRemovedFromPoolEvent has copy, drop {
+    pool_id: ID,
+    user_address: address,
 }
 
 public fun get_pool_threshold_type(threshold: String): THRESHOLD_TYPE {
@@ -172,20 +190,50 @@ public fun get_pool_contributors(pool: &Pool): &Table<address, u64> {
 }
 
 public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &PoolInitiatorCap) {
-    if (!table::contains(&pool.contributors, user_address)) {
-        table::add(&mut pool.contributors, user_address, 0);
-    }
+    assert!(!table::contains(&pool.contributors, user_address), EaddressAlreadyAContributor);
+    table::add(&mut pool.contributors, user_address, 0);
+
+    event::emit(ContributorAddedToPoolEvent {
+        pool_id: object::id(pool),
+        user_address,
+    })
 }
 
 public fun join_pool(ctx: &mut TxContext, pool: &mut Pool) {
     assert!(&pool.visibility == POOL_VISIBILITY::PUBLIC, ECannotJoinPrivatePool);
+    assert!(!table::contains(&pool.contributors, ctx.sender()), EaddressAlreadyAContributor);
 
-    if (!table::contains(&pool.contributors, ctx.sender())) {
-        table::add(&mut pool.contributors, ctx.sender(), 0);
-    }
+    table::add(&mut pool.contributors, ctx.sender(), 0);
+
+    event::emit(ContributorJoinedPoolEvent {
+        pool_id: object::id(pool),
+        user_address: ctx.sender(),
+    })
 }
 
-public fun remove_contributor_from_pool() {}
+public fun remove_contributor_from_pool(
+    pool: &mut Pool,
+    user_address: address,
+    _: &PoolInitiatorCap,
+    ctx: &mut TxContext,
+) {
+    assert!(table::contains(&pool.contributors, user_address), EAddressNotAContributor);
+
+    let user_contribution = table::borrow(&pool.contributors, user_address);
+    let pool_escrow: &mut PoolEscrow = dof::borrow_mut(&mut pool.id, PoolEscrowKey {});
+
+    let refund_balance = balance::split(&mut pool_escrow.value, *user_contribution);
+    let refund_coin = coin::from_balance(refund_balance, ctx);
+
+    transfer::public_transfer(refund_coin, user_address);
+
+    table::remove(&mut pool.contributors, user_address);
+
+    event::emit(ContributorRemovedFromPoolEvent {
+        pool_id: object::id(pool),
+        user_address,
+    })
+}
 
 public fun convert_contributor_to_admin() {}
 
