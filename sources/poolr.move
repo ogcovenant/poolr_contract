@@ -45,8 +45,7 @@ public struct Pool has key {
     recipient: address,
     target_amount: u64,
     visibility: POOL_VISIBILITY,
-    contributors: vector<address>,
-    contributions: Table<address, u64>,
+    contributors: Table<address, u64>,
     threshold_contribution: Option<u64>,
     voters: Table<address, bool>,
     threshold_type: THRESHOLD_TYPE,
@@ -124,7 +123,7 @@ public fun create_pool(
     let mut contributors = vector::empty<address>();
     vector::push_back(&mut contributors, ctx.sender());
 
-    let contributions: Table<address, u64> = table::new(ctx);
+    let contributors: Table<address, u64> = table::new(ctx);
     let voters: Table<address, bool> = table::new(ctx);
 
     let mut pool = Pool {
@@ -140,7 +139,6 @@ public fun create_pool(
         threshold_contribution,
         status: POOL_STATUS::OPEN,
         voters,
-        contributions,
         deadline_ms,
         visibility,
     };
@@ -168,12 +166,14 @@ public fun get_pool_initiator(pool: &Pool): address {
     pool.initiator
 }
 
-public fun get_pool_contributors(pool: &Pool): vector<address> {
-    pool.contributors
+public fun get_pool_contributors(pool: &Pool): &Table<address, u64> {
+    &pool.contributors
 }
 
 public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &PoolInitiatorCap) {
-    vector::push_back(&mut pool.contributors, user_address);
+    if (!table::contains(&pool.contributors, user_address)) {
+        table::add(&mut pool.contributors, user_address, 0);
+    }
 }
 
 public fun join_pool() {}

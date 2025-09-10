@@ -9,6 +9,7 @@ use poolr::poolr::{
     add_contributor_to_pool,
     PoolInitiatorCap
 };
+use sui::table;
 use sui::test_scenario as ts;
 
 const BOB: address = @0xA;
@@ -77,7 +78,7 @@ fun test_contributor_addition() {
     {
         let contributors = test_pool.get_pool_contributors();
 
-        assert!(vector::contains(&contributors, &A11C3), 2);
+        assert!(table::contains(contributors, *&A11C3), 2);
         ts::return_shared<Pool>(test_pool);
     };
     ts::end(scenario);
