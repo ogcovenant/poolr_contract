@@ -57,7 +57,7 @@ fun test_contributor_addition() {
         65,
         option::some(0),
         30,
-        b"PUBLIC".to_string(),
+        b"PRIVATE".to_string(),
         &clock,
     );
 
