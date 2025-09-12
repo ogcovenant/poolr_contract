@@ -19,6 +19,7 @@ const EInvalidContributionAmount: u64 = 507;
 const EZeroContribution: u64 = 508;
 const ETargetAmountReached: u64 = 509;
 const EPoolDeadlineReached: u64 = 510;
+const ECannotAddAddressToPrivatePool: u64 = 511;
 
 public enum THRESHOLD_TYPE has store {
     COUNT,
@@ -201,6 +202,7 @@ public fun get_pool_contributors(pool: &Pool): &Table<address, u64> {
 }
 
 public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &PoolInitiatorCap) {
+    assert!(&pool.visibility == POOL_VISIBILITY::PRIVATE, ECannotAddAddressToPrivatePool);
     assert!(!table::contains(&pool.contributors, user_address), EAddressAlreadyAContributor);
     table::add(&mut pool.contributors, user_address, 0);
 
