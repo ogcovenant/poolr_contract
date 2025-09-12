@@ -2,6 +2,7 @@
 module poolr::poolr_test;
 
 use poolr::poolr::{create_pool, Pool, add_contributor_to_pool, PoolInitiatorCap, join_pool};
+use sui::clock;
 use sui::table;
 use sui::test_scenario as ts;
 
@@ -12,8 +13,8 @@ const A11C3: address = @0xB;
 fun test_pool_creation() {
     //initialise test scenario
     let mut scenario = ts::begin(BOB);
+    let clock = clock::create_for_testing(ts::ctx(&mut scenario));
 
-    //Create pool
     create_pool(
         ts::ctx(&mut scenario),
         b"Test Pool".to_string(),
@@ -25,6 +26,7 @@ fun test_pool_creation() {
         option::some(0),
         30,
         b"PUBLIC".to_string(),
+        &clock,
     );
 
     ts::next_tx(&mut scenario, BOB);
@@ -35,13 +37,15 @@ fun test_pool_creation() {
 
         ts::return_shared<Pool>(pool);
     };
+
+    clock.destroy_for_testing();
     ts::end(scenario);
 }
 
 #[test]
 fun test_contributor_addition() {
     let mut scenario = ts::begin(BOB);
-    let test_pool;
+    let clock = clock::create_for_testing(ts::ctx(&mut scenario));
 
     create_pool(
         ts::ctx(&mut scenario),
@@ -54,6 +58,7 @@ fun test_contributor_addition() {
         option::some(0),
         30,
         b"PUBLIC".to_string(),
+        &clock,
     );
 
     ts::next_tx(&mut scenario, BOB);
@@ -63,23 +68,27 @@ fun test_contributor_addition() {
 
         add_contributor_to_pool(&mut pool, A11C3, &initiator_cap);
 
-        test_pool = pool;
+        ts::return_shared<Pool>(pool);
         ts::return_to_sender(&scenario, initiator_cap);
     };
     ts::next_tx(&mut scenario, BOB);
     {
-        let contributors = test_pool.get_pool_contributors();
+        let pool = ts::take_shared<Pool>(&scenario);
+        let contributors = pool.get_pool_contributors();
 
         assert!(table::contains(contributors, A11C3), 2);
-        ts::return_shared<Pool>(test_pool);
+        ts::return_shared<Pool>(pool);
     };
+
+    clock.destroy_for_testing();
     ts::end(scenario);
 }
 
 #[test]
 fun test_join_pool() {
     let mut scenario = ts::begin(BOB);
-    let test_pool;
+
+    let clock = clock::create_for_testing(ts::ctx(&mut scenario));
 
     create_pool(
         ts::ctx(&mut scenario),
@@ -92,6 +101,7 @@ fun test_join_pool() {
         option::some(0),
         30,
         b"PUBLIC".to_string(),
+        &clock,
     );
 
     ts::next_tx(&mut scenario, A11C3);
@@ -100,17 +110,16 @@ fun test_join_pool() {
 
         join_pool(ts::ctx(&mut scenario), &mut pool);
 
-        test_pool = pool;
+        ts::return_shared<Pool>(pool);
     };
     ts::next_tx(&mut scenario, BOB);
     {
-        let contributors = test_pool.get_pool_contributors();
+        let pool = ts::take_shared<Pool>(&scenario);
+        let contributors = pool.get_pool_contributors();
 
         assert!(table::contains(contributors, A11C3), 2);
-        ts::return_shared<Pool>(test_pool);
+        ts::return_shared<Pool>(pool);
     };
+    clock.destroy_for_testing();
     ts::end(scenario);
 }
-
-#[test]
-fun test_remove_contributor() {}

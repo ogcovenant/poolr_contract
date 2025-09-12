@@ -2,7 +2,8 @@ module poolr::poolr;
 
 use std::string::String;
 use sui::balance::{Self, Balance};
-use sui::coin;
+use sui::clock::{Self, Clock};
+use sui::coin::{Self, Coin};
 use sui::dynamic_object_field as dof;
 use sui::event;
 use sui::table::{Self, Table};
@@ -12,15 +13,19 @@ const EInvalidThreshold: u64 = 501;
 const EInvalidStatus: u64 = 502;
 const EInvalidVisibility: u64 = 503;
 const ECannotJoinPrivatePool: u64 = 504;
-const EaddressAlreadyAContributor: u64 = 505;
+const EAddressAlreadyAContributor: u64 = 505;
 const EAddressNotAContributor: u64 = 506;
+const EInvalidContributionAmount: u64 = 507;
+const EZeroContribution: u64 = 508;
+const ETargetAmountReached: u64 = 509;
+const EPoolDeadlineReached: u64 = 510;
 
 public enum THRESHOLD_TYPE has store {
     COUNT,
     PERCENTAGE,
 }
 
-public enum POOL_STATUS has store {
+public enum POOL_STATUS has drop, store {
     OPEN,
     FUNDED,
     VOTING,
@@ -48,14 +53,16 @@ public struct Pool has key {
     initiator: address,
     recipient: address,
     target_amount: u64,
+    contributed_amount: u64,
     visibility: POOL_VISIBILITY,
     contributors: Table<address, u64>,
-    threshold_contribution: Option<u64>,
-    voters: Table<address, bool>,
     threshold_type: THRESHOLD_TYPE,
-    threshold_value: u8,
+    threshold_contribution: Option<u64>,
+    threshold_value: u64,
+    voters: Table<address, bool>,
     status: POOL_STATUS,
-    deadline_ms: u64,
+    creation_timestamp: u64,
+    deadline_timestamp: u64,
 }
 
 public struct PoolInitiatorCap has key {
@@ -77,9 +84,10 @@ public struct ContributorJoinedPoolEvent has copy, drop {
     user_address: address,
 }
 
-public struct ContributorRemovedFromPoolEvent has copy, drop {
+public struct ContributionAddedEvent has copy, drop {
     pool_id: ID,
     user_address: address,
+    amount: u64,
 }
 
 public fun get_pool_threshold_type(threshold: String): THRESHOLD_TYPE {
@@ -134,16 +142,17 @@ public fun create_pool(
     recipient: address,
     target_amount: u64,
     threshold_type: String,
-    threshold_value: u8,
+    threshold_value: u64,
     threshold_contribution: Option<u64>,
-    deadline_ms: u64,
+    deadline: u64,
     visibility: String,
+    clock: &Clock,
 ) {
-    let mut contributors = vector::empty<address>();
-    vector::push_back(&mut contributors, ctx.sender());
-
     let contributors: Table<address, u64> = table::new(ctx);
     let voters: Table<address, bool> = table::new(ctx);
+
+    let current_time = clock::timestamp_ms(clock);
+    let deadline_timestamp = current_time + ( deadline * 24 * 60 * 60 * 1000 );
 
     let mut pool = Pool {
         id: object::new(ctx),
@@ -153,12 +162,14 @@ public fun create_pool(
         contributors,
         recipient,
         target_amount,
+        contributed_amount: 0,
         threshold_type: get_pool_threshold_type(threshold_type),
         threshold_value,
         threshold_contribution,
         status: POOL_STATUS::OPEN,
         voters,
-        deadline_ms,
+        creation_timestamp: current_time,
+        deadline_timestamp,
         visibility: get_pool_visibility_type(visibility),
     };
 
@@ -190,7 +201,7 @@ public fun get_pool_contributors(pool: &Pool): &Table<address, u64> {
 }
 
 public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &PoolInitiatorCap) {
-    assert!(!table::contains(&pool.contributors, user_address), EaddressAlreadyAContributor);
+    assert!(!table::contains(&pool.contributors, user_address), EAddressAlreadyAContributor);
     table::add(&mut pool.contributors, user_address, 0);
 
     event::emit(ContributorAddedToPoolEvent {
@@ -201,7 +212,7 @@ public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &P
 
 public fun join_pool(ctx: &mut TxContext, pool: &mut Pool) {
     assert!(&pool.visibility == POOL_VISIBILITY::PUBLIC, ECannotJoinPrivatePool);
-    assert!(!table::contains(&pool.contributors, ctx.sender()), EaddressAlreadyAContributor);
+    assert!(!table::contains(&pool.contributors, ctx.sender()), EAddressAlreadyAContributor);
 
     table::add(&mut pool.contributors, ctx.sender(), 0);
 
@@ -211,33 +222,42 @@ public fun join_pool(ctx: &mut TxContext, pool: &mut Pool) {
     })
 }
 
-public fun remove_contributor_from_pool(
+public fun contribute_to_pool(
+    contribution: Coin<USDC>,
     pool: &mut Pool,
-    user_address: address,
-    _: &PoolInitiatorCap,
     ctx: &mut TxContext,
+    clock: &Clock,
 ) {
-    assert!(table::contains(&pool.contributors, user_address), EAddressNotAContributor);
+    let contributors = &pool.contributors;
+    let user_contribution = coin::value(&contribution);
+    let current_timestamp = clock::timestamp_ms(clock);
 
-    let user_contribution = table::borrow(&pool.contributors, user_address);
+    assert!(current_timestamp < pool.deadline_timestamp, EPoolDeadlineReached);
+    assert!(table::contains(contributors, ctx.sender()), EAddressNotAContributor);
+    assert!(user_contribution > 0, EZeroContribution);
+    assert!(
+        user_contribution >= *option::borrow(&pool.threshold_contribution),
+        EInvalidContributionAmount,
+    );
+    assert!(pool.contributed_amount < pool.target_amount, ETargetAmountReached);
+
     let pool_escrow: &mut PoolEscrow = dof::borrow_mut(&mut pool.id, PoolEscrowKey {});
+    let existing_contribution = table::borrow_mut(&mut pool.contributors, ctx.sender());
+    let user_contribution_balance = coin::into_balance(contribution);
+    balance::join(&mut pool_escrow.value, user_contribution_balance);
+    *existing_contribution = *existing_contribution + user_contribution;
 
-    let refund_balance = balance::split(&mut pool_escrow.value, *user_contribution);
-    let refund_coin = coin::from_balance(refund_balance, ctx);
+    pool.contributed_amount = pool.contributed_amount + user_contribution;
 
-    transfer::public_transfer(refund_coin, user_address);
-
-    table::remove(&mut pool.contributors, user_address);
-
-    event::emit(ContributorRemovedFromPoolEvent {
+    if (pool.contributed_amount >= pool.target_amount) {
+        pool.status = POOL_STATUS::FUNDED;
+    };
+    event::emit(ContributionAddedEvent {
         pool_id: object::id(pool),
-        user_address,
+        user_address: ctx.sender(),
+        amount: user_contribution,
     })
 }
-
-public fun convert_contributor_to_admin() {}
-
-public fun contribute_to_pool() {}
 
 public fun request_pool_release() {}
 
