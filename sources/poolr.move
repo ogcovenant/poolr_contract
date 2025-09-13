@@ -16,7 +16,6 @@ const ECannotJoinPrivatePool: u64 = 504;
 const EAddressAlreadyAContributor: u64 = 505;
 const EAddressNotAContributor: u64 = 506;
 const EInvalidContributionAmount: u64 = 507;
-const EZeroContribution: u64 = 508;
 const ETargetAmountReached: u64 = 509;
 const EPoolDeadlineReached: u64 = 510;
 const ECannotAddAddressToPrivatePool: u64 = 511;
@@ -268,6 +267,10 @@ public fun contribute_to_pool(
         user_address: ctx.sender(),
         amount: user_contribution,
     })
+}
+
+public fun get_contributed_amount(pool: &Pool): u64 {
+    pool.contributed_amount
 }
 
 public fun request_pool_release() {}

@@ -1,10 +1,19 @@
 #[test_only]
 module poolr::poolr_test;
 
-use poolr::poolr::{create_pool, Pool, add_contributor_to_pool, PoolInitiatorCap, join_pool};
+use poolr::poolr::{
+    create_pool,
+    Pool,
+    add_contributor_to_pool,
+    PoolInitiatorCap,
+    join_pool,
+    contribute_to_pool
+};
 use sui::clock;
+use sui::coin;
 use sui::table;
 use sui::test_scenario as ts;
+use usdc::usdc::USDC;
 
 const BOB: address = @0xA;
 const A11C3: address = @0xB;
@@ -127,6 +136,45 @@ fun test_join_pool() {
 #[test]
 fun test_pool_contribution() {
     let mut scenario = ts::begin(BOB);
+    let clock = clock::create_for_testing(ts::ctx(&mut scenario));
 
+    create_pool(
+        ts::ctx(&mut scenario),
+        b"Test Pool".to_string(),
+        b"Just Testing Pool Creation".to_string(),
+        A11C3,
+        200,
+        b"PERCENTAGE".to_string(),
+        65,
+        option::some(0),
+        30,
+        b"PUBLIC".to_string(),
+        &clock,
+    );
+
+    //contribute to pool
+    ts::next_tx(&mut scenario, BOB);
+    {
+        let mut pool = ts::take_shared<Pool>(&scenario);
+        let coin = coin::mint_for_testing<USDC>(200, ts::ctx(&mut scenario));
+
+        contribute_to_pool(coin, &mut pool, ts::ctx(&mut scenario), &clock);
+
+        ts::return_shared(pool);
+    };
+
+    //Check contribution validity
+    ts::next_tx(&mut scenario, BOB);
+    {
+        let pool = ts::take_shared<Pool>(&scenario);
+        let contributors = pool.get_pool_contributors();
+
+        assert!(pool.get_contributed_amount() == 200, 0);
+        assert!(table::borrow(contributors, BOB) == 200, 1);
+
+        ts::return_shared(pool);
+    };
+
+    clock.destroy_for_testing();
     ts::end(scenario);
 }
