@@ -4,11 +4,11 @@ use std::string::String;
 use sui::balance::{Self, Balance};
 use sui::clock::{Self, Clock};
 use sui::coin::{Self, Coin};
-use sui::dynamic_object_field as dof;
 use sui::event;
 use sui::table::{Self, Table};
 use usdc::usdc::USDC;
 
+const EZeroTargetAmount: u64 = 500;
 const EInvalidThreshold: u64 = 501;
 const EInvalidStatus: u64 = 502;
 const EInvalidVisibility: u64 = 503;
@@ -20,6 +20,7 @@ const EZeroContribution: u64 = 508;
 const ETargetAmountReached: u64 = 509;
 const EPoolDeadlineReached: u64 = 510;
 const ECannotAddAddressToPrivatePool: u64 = 511;
+const EZeroDeadlineCount: u64 = 512;
 
 public enum THRESHOLD_TYPE has store {
     COUNT,
@@ -39,8 +40,6 @@ public enum POOL_VISIBILITY has drop, store {
     PRIVATE,
     PUBLIC,
 }
-
-public struct PoolEscrowKey has copy, drop, store {}
 
 public struct PoolEscrow has key, store {
     id: UID,
@@ -64,10 +63,12 @@ public struct Pool has key {
     status: POOL_STATUS,
     creation_timestamp: u64,
     deadline_timestamp: u64,
+    pool_escrow: PoolEscrow,
 }
 
 public struct PoolInitiatorCap has key {
     id: UID,
+    pool_id: ID,
 }
 
 public struct PoolCreatedEvent has copy, drop {
@@ -149,13 +150,23 @@ public fun create_pool(
     visibility: String,
     clock: &Clock,
 ) {
-    let contributors: Table<address, u64> = table::new(ctx);
+    assert!(target_amount <= 0, EZeroTargetAmount);
+    assert!(deadline <= 0, EZeroDeadlineCount);
+
+    let mut contributors: Table<address, u64> = table::new(ctx);
     let voters: Table<address, bool> = table::new(ctx);
+
+    table::add(&mut contributors, ctx.sender(), 0);
 
     let current_time = clock::timestamp_ms(clock);
     let deadline_timestamp = current_time + ( deadline * 24 * 60 * 60 * 1000 );
 
-    let mut pool = Pool {
+    let pool_escrow = PoolEscrow {
+        id: object::new(ctx),
+        value: balance::zero<USDC>(),
+    };
+
+    let pool = Pool {
         id: object::new(ctx),
         title,
         description,
@@ -172,17 +183,13 @@ public fun create_pool(
         creation_timestamp: current_time,
         deadline_timestamp,
         visibility: get_pool_visibility_type(visibility),
+        pool_escrow,
     };
 
     let poolInitiatorCap = PoolInitiatorCap {
         id: object::new(ctx),
+        pool_id: object::id(&pool),
     };
-    let pool_escrow = PoolEscrow {
-        id: object::new(ctx),
-        value: balance::zero<USDC>(),
-    };
-
-    dof::add(&mut pool.id, PoolEscrowKey {}, pool_escrow);
 
     event::emit(PoolCreatedEvent {
         pool_id: object::id(&pool),
@@ -243,7 +250,7 @@ public fun contribute_to_pool(
     );
     assert!(pool.contributed_amount < pool.target_amount, ETargetAmountReached);
 
-    let pool_escrow: &mut PoolEscrow = dof::borrow_mut(&mut pool.id, PoolEscrowKey {});
+    let pool_escrow = &mut pool.pool_escrow;
     let existing_contribution = table::borrow_mut(&mut pool.contributors, ctx.sender());
     let user_contribution_balance = coin::into_balance(contribution);
     balance::join(&mut pool_escrow.value, user_contribution_balance);
