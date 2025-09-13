@@ -21,6 +21,7 @@ const ETargetAmountReached: u64 = 509;
 const EPoolDeadlineReached: u64 = 510;
 const ECannotAddAddressToPrivatePool: u64 = 511;
 const EZeroDeadlineCount: u64 = 512;
+const EAddressAlreadyContributed: u64 = 513;
 
 public enum THRESHOLD_TYPE has store {
     COUNT,
@@ -243,15 +244,16 @@ public fun contribute_to_pool(
 
     assert!(current_timestamp < pool.deadline_timestamp, EPoolDeadlineReached);
     assert!(table::contains(contributors, ctx.sender()), EAddressNotAContributor);
-    assert!(user_contribution > 0, EZeroContribution);
     assert!(
         user_contribution >= *option::borrow(&pool.threshold_contribution),
         EInvalidContributionAmount,
     );
     assert!(pool.contributed_amount < pool.target_amount, ETargetAmountReached);
 
-    let pool_escrow = &mut pool.pool_escrow;
     let existing_contribution = table::borrow_mut(&mut pool.contributors, ctx.sender());
+    assert!(existing_contribution == 0, EAddressAlreadyContributed);
+
+    let pool_escrow = &mut pool.pool_escrow;
     let user_contribution_balance = coin::into_balance(contribution);
     balance::join(&mut pool_escrow.value, user_contribution_balance);
     *existing_contribution = *existing_contribution + user_contribution;
