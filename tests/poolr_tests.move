@@ -123,3 +123,10 @@ fun test_join_pool() {
     clock.destroy_for_testing();
     ts::end(scenario);
 }
+
+#[test]
+fun test_pool_contribution() {
+    let mut scenario = ts::begin(BOB);
+
+    ts::end(scenario);
+}

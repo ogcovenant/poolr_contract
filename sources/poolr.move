@@ -150,8 +150,8 @@ public fun create_pool(
     visibility: String,
     clock: &Clock,
 ) {
-    assert!(target_amount <= 0, EZeroTargetAmount);
-    assert!(deadline <= 0, EZeroDeadlineCount);
+    assert!(target_amount > 0, EZeroTargetAmount);
+    assert!(deadline > 0, EZeroDeadlineCount);
 
     let mut contributors: Table<address, u64> = table::new(ctx);
     let voters: Table<address, bool> = table::new(ctx);
