@@ -8,8 +8,9 @@ use sui::event;
 use sui::table::{Self, Table};
 use usdc::usdc::USDC;
 
+const TOTAL_VOTING_POWER: u64 = 1_000_000_000;
+
 const EZeroTargetAmount: u64 = 500;
-const EInvalidThreshold: u64 = 501;
 const EInvalidStatus: u64 = 502;
 const EInvalidVisibility: u64 = 503;
 const ECannotJoinPrivatePool: u64 = 504;
@@ -18,27 +19,40 @@ const EAddressNotAContributor: u64 = 506;
 const EInvalidContributionAmount: u64 = 507;
 const ETargetAmountReached: u64 = 509;
 const EPoolDeadlineReached: u64 = 510;
-const ECannotAddAddressToPrivatePool: u64 = 511;
+const ECannotAddAddressToPublicPool: u64 = 511;
 const EZeroDeadlineCount: u64 = 512;
-const EAddressAlreadyContributed: u64 = 513;
+const EAddressNotPoolInitiator: u64 = 514;
+const ECannotContributeToClosedPool: u64 = 515;
+const EContributedAmountIsLowForThisAction: u64 = 516;
+const ECannotAddContributorToClosedPool: u64 = 517;
+const ECannotInitializeFundingOnClosedPool: u64 = 518;
+const ECannotJoinClosedPool: u64 = 519;
+const EPoolHasNotBeenInitializedForVoting: u64 = 520;
+const EInvalidVoteChoice: u64 = 521;
+const EAddressNotAVoter: u64 = 522;
+const EVotingRequirementNotMet: u64 = 523;
+const ECannotReleaseFundsOnOpenPool: u64 = 524;
+const EPoolNotRejected: u64 = 525;
 
-public enum THRESHOLD_TYPE has store {
-    COUNT,
-    PERCENTAGE,
-}
-
-public enum POOL_STATUS has drop, store {
+public enum POOL_STATUS has drop, store, copy {
     OPEN,
+    FUNDING,
     FUNDED,
     VOTING,
-    EXECUTED,
-    REFUNDED,
-    REUSED,
+    RELEASED,
+    REJECTED,
+    REFUNDING,
+    REFUNDED
 }
 
-public enum POOL_VISIBILITY has drop, store {
+public enum POOL_VISIBILITY has drop, store, copy {
     PRIVATE,
     PUBLIC,
+}
+
+public enum VOTE_CHOICE has copy, drop, store {
+    YES,
+    NO
 }
 
 public struct PoolEscrow has key, store {
@@ -56,10 +70,12 @@ public struct Pool has key {
     contributed_amount: u64,
     visibility: POOL_VISIBILITY,
     contributors: Table<address, u64>,
-    threshold_type: THRESHOLD_TYPE,
     threshold_contribution: Option<u64>,
-    threshold_value: u64,
-    voters: Table<address, bool>,
+    voting_threshold: u64,
+    voters: Table<address, u64>,
+    yes_votes: u64,
+    no_votes: u64,
+    total_votes: u64,
     status: POOL_STATUS,
     creation_timestamp: u64,
     deadline_timestamp: u64,
@@ -92,37 +108,62 @@ public struct ContributionAddedEvent has copy, drop {
     amount: u64,
 }
 
-public fun get_pool_threshold_type(threshold: String): THRESHOLD_TYPE {
-    if (threshold != b"COUNT".to_string() && threshold != b"PERCENTAGE".to_string()) {
-        abort EInvalidThreshold
-    };
+public struct PoolFundingInitialisedEvent has copy, drop {
+    pool_id: ID
+}
 
-    if (threshold == b"COUNT".to_string()) {
-        THRESHOLD_TYPE::COUNT
-    } else {
-        THRESHOLD_TYPE::PERCENTAGE
-    }
+public struct PoolReleaseRequestEvent has copy, drop {
+    pool_id: ID
+}
+
+public struct PoolVotedEvent has copy, drop {
+    pool_id: ID,
+    voter: address,
+    choice: String
+}
+
+public struct PoolReleasedEvent has copy, drop {
+    pool_id: ID,
+    receipient: address
+}
+
+public struct PoolRefundClaimed has copy, drop {
+    pool_id: ID,
+    receipient: address,
+    amount: u64
 }
 
 public fun get_pool_status_type(status: String): POOL_STATUS {
     if (
-        status != b"OPEN".to_string() && status != b"FUNDED".to_string() && status != b"VOTING".to_string() && status != b"EXECUTED".to_string() && status != b"REFUNDED".to_string() && status != b"REUSED".to_string()
-    ) {
-        abort EInvalidStatus
-    };
+    status != b"OPEN".to_string() &&
+    status != b"FUNDING".to_string() &&
+    status != b"FUNDED".to_string() &&
+    status != b"VOTING".to_string() &&
+    status != b"RELEASED".to_string() &&
+    status != b"REJECTED".to_string() &&
+    status != b"REFUNDING".to_string() &&
+    status != b"REFUNDED".to_string()
+) {
+    abort EInvalidStatus
+};
+
 
     if (status == b"OPEN".to_string()) {
         POOL_STATUS::OPEN
-    } else if (status == b"FUNDED".to_string()) {
+    } else if (status == b"FUNDING".to_string()) {
+        POOL_STATUS::FUNDING
+    }else if (status == b"FUNDED".to_string()) {
         POOL_STATUS::FUNDED
     } else if (status == b"VOTING".to_string()) {
         POOL_STATUS::VOTING
-    } else if (status == b"EXECUTED".to_string()) {
-        POOL_STATUS::EXECUTED
-    } else if (status == b"REFUNDED".to_string()) {
+    }else if (status == b"RELEASED".to_string()) {
+        POOL_STATUS::RELEASED
+    }else if (status == b"REJECTED".to_string()) {
+        POOL_STATUS::REJECTED
+    }else if (status == b"REFUNDED".to_string()) {
         POOL_STATUS::REFUNDED
     } else {
-        POOL_STATUS::REUSED
+        POOL_STATUS::REFUNDING
     }
 }
 
@@ -143,8 +184,7 @@ public fun create_pool(
     description: String,
     recipient: address,
     target_amount: u64,
-    threshold_type: String,
-    threshold_value: u64,
+    voting_threshold: u64,
     threshold_contribution: Option<u64>,
     deadline: u64,
     visibility: String,
@@ -154,9 +194,10 @@ public fun create_pool(
     assert!(deadline > 0, EZeroDeadlineCount);
 
     let mut contributors: Table<address, u64> = table::new(ctx);
-    let voters: Table<address, bool> = table::new(ctx);
+    let mut voters: Table<address, u64> = table::new(ctx);
 
     table::add(&mut contributors, ctx.sender(), 0);
+    table::add(&mut voters, ctx.sender(), 0);
 
     let current_time = clock::timestamp_ms(clock);
     let deadline_timestamp = current_time + ( deadline * 24 * 60 * 60 * 1000 );
@@ -175,11 +216,13 @@ public fun create_pool(
         recipient,
         target_amount,
         contributed_amount: 0,
-        threshold_type: get_pool_threshold_type(threshold_type),
-        threshold_value,
         threshold_contribution,
+        voting_threshold,
+        total_votes: 0,
         status: POOL_STATUS::OPEN,
         voters,
+        yes_votes: 0,
+        no_votes: 0,
         creation_timestamp: current_time,
         deadline_timestamp,
         visibility: get_pool_visibility_type(visibility),
@@ -208,10 +251,19 @@ public fun get_pool_contributors(pool: &Pool): &Table<address, u64> {
     &pool.contributors
 }
 
-public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &PoolInitiatorCap) {
-    assert!(&pool.visibility == POOL_VISIBILITY::PRIVATE, ECannotAddAddressToPrivatePool);
+public entry fun add_contributor_to_pool(
+    pool: &mut Pool,
+    user_address: address,
+    pool_initiator_cap: &PoolInitiatorCap,
+) {
+    assert!(pool_initiator_cap.pool_id == object::id(pool), EAddressNotPoolInitiator);
+    assert!(pool.visibility == POOL_VISIBILITY::PRIVATE, ECannotAddAddressToPublicPool);
+    assert!(pool.status == POOL_STATUS::OPEN, ECannotAddContributorToClosedPool);
     assert!(!table::contains(&pool.contributors, user_address), EAddressAlreadyAContributor);
+
     table::add(&mut pool.contributors, user_address, 0);
+    table::add(&mut pool.voters, user_address, 0);
+    
 
     event::emit(ContributorAddedToPoolEvent {
         pool_id: object::id(pool),
@@ -220,14 +272,27 @@ public fun add_contributor_to_pool(pool: &mut Pool, user_address: address, _: &P
 }
 
 public fun join_pool(ctx: &mut TxContext, pool: &mut Pool) {
-    assert!(&pool.visibility == POOL_VISIBILITY::PUBLIC, ECannotJoinPrivatePool);
+    assert!(pool.visibility == POOL_VISIBILITY::PUBLIC, ECannotJoinPrivatePool);
+    assert!(pool.status == POOL_STATUS::OPEN, ECannotJoinClosedPool);
     assert!(!table::contains(&pool.contributors, ctx.sender()), EAddressAlreadyAContributor);
 
     table::add(&mut pool.contributors, ctx.sender(), 0);
+     table::add(&mut pool.voters, ctx.sender(), 0);
 
     event::emit(ContributorJoinedPoolEvent {
         pool_id: object::id(pool),
         user_address: ctx.sender(),
+    })
+}
+
+public entry fun initialize_pool_funding(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap,) {
+    assert!(pool_initiator_cap.pool_id == object::id(pool), EAddressNotPoolInitiator);
+    assert!(pool.status == POOL_STATUS::OPEN, ECannotInitializeFundingOnClosedPool);
+
+    pool.status = POOL_STATUS::FUNDING;
+
+    event::emit(PoolFundingInitialisedEvent {
+        pool_id: object::id(pool)
     })
 }
 
@@ -237,20 +302,30 @@ public fun contribute_to_pool(
     ctx: &mut TxContext,
     clock: &Clock,
 ) {
-    let contributors = &pool.contributors;
+    let contributors = &mut pool.contributors;
     let user_contribution = coin::value(&contribution);
     let current_timestamp = clock::timestamp_ms(clock);
+    let voters = &mut pool.voters;
+    
 
+    assert!(pool.status == POOL_STATUS::FUNDING, ECannotContributeToClosedPool);
     assert!(current_timestamp < pool.deadline_timestamp, EPoolDeadlineReached);
     assert!(table::contains(contributors, ctx.sender()), EAddressNotAContributor);
+    assert!(table::contains(voters, ctx.sender()), EAddressNotAVoter);
+    if (option::is_some(&pool.threshold_contribution)) {
+        assert!(
+            user_contribution >= *option::borrow(&pool.threshold_contribution),
+            EInvalidContributionAmount,
+        );
+    };
     assert!(
-        user_contribution >= *option::borrow(&pool.threshold_contribution),
-        EInvalidContributionAmount,
+        pool.contributed_amount + user_contribution <= pool.target_amount,
+        ETargetAmountReached,
     );
-    assert!(pool.contributed_amount < pool.target_amount, ETargetAmountReached);
 
-    let existing_contribution = table::borrow_mut(&mut pool.contributors, ctx.sender());
-    assert!(existing_contribution == 0, EAddressAlreadyContributed);
+    let contributor_current_voting_power = table::borrow_mut(voters, ctx.sender());
+
+    let existing_contribution = table::borrow_mut(contributors, ctx.sender());
 
     let pool_escrow = &mut pool.pool_escrow;
     let user_contribution_balance = coin::into_balance(contribution);
@@ -258,6 +333,10 @@ public fun contribute_to_pool(
     *existing_contribution = *existing_contribution + user_contribution;
 
     pool.contributed_amount = pool.contributed_amount + user_contribution;
+   
+    let voting_power_to_be_assigned = ( (user_contribution as u128) * (TOTAL_VOTING_POWER as u128) ) / (pool.target_amount as u128);
+
+    *contributor_current_voting_power = *contributor_current_voting_power + (voting_power_to_be_assigned as u64);
 
     if (pool.contributed_amount >= pool.target_amount) {
         pool.status = POOL_STATUS::FUNDED;
@@ -273,18 +352,117 @@ public fun get_contributed_amount(pool: &Pool): u64 {
     pool.contributed_amount
 }
 
-public fun request_pool_release() {}
+public entry fun request_pool_release(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap) {
+    assert!(pool_initiator_cap.pool_id == object::id(pool), EAddressNotPoolInitiator);
+    assert!(pool.status == POOL_STATUS::FUNDED, EContributedAmountIsLowForThisAction);
 
-public fun vote() {}
+    pool.status = POOL_STATUS::VOTING;
 
-public fun release_pool_funds() {}
+    event::emit(PoolReleaseRequestEvent {
+        pool_id: object::id(pool)
+    })
+}
 
-public fun cancel_and_refund_pool() {}
+public fun get_vote_choice (choice: String): VOTE_CHOICE {
+    if(choice != b"YES".to_string() && choice != b"NO".to_string()) {
+        abort EInvalidVoteChoice
+    };
 
-public fun reuse_funds() {}
+    if(choice == b"YES".to_string()){ 
+        VOTE_CHOICE::YES
+    }else {
+        VOTE_CHOICE::NO
+    }
+}
 
-public fun get_pool() {}
+public entry fun vote(pool: &mut Pool, choice: String, ctx: &TxContext) {
+    let voters = &mut pool.voters;
 
-public fun list_pool_contributors() {}
+    assert!(pool.status == POOL_STATUS::VOTING, EPoolHasNotBeenInitializedForVoting);
+    assert!(table::contains(voters, ctx.sender()), EAddressNotAContributor);
 
-public fun get_contribution_of() {}
+    let user_voting_power = table::borrow_mut(voters, ctx.sender());
+    let user_vote_choice = get_vote_choice(choice);
+
+    if(user_vote_choice == VOTE_CHOICE::YES){
+        pool.yes_votes = pool.yes_votes + *user_voting_power;
+        pool.total_votes = pool.total_votes + *user_voting_power;
+
+        *user_voting_power = 0;
+    }else {
+        pool.no_votes = pool.no_votes + *user_voting_power;
+        pool.total_votes = pool.total_votes + *user_voting_power;
+
+        *user_voting_power = 0;
+    };
+
+    event::emit(PoolVotedEvent {
+        pool_id: object::id(pool),
+        voter: ctx.sender(),
+        choice
+    })
+}
+
+public entry fun release_pool_funds(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap, ctx: &mut TxContext) {
+    assert!(pool_initiator_cap.pool_id == object::id(pool), EAddressNotPoolInitiator);
+    assert!(pool.status == POOL_STATUS::VOTING, ECannotReleaseFundsOnOpenPool);
+
+    let voting_threshold = ((pool.voting_threshold as u128) * (TOTAL_VOTING_POWER as u128)) / 100;
+    assert!(pool.total_votes >= (voting_threshold as u64), EVotingRequirementNotMet);
+
+    if(pool.yes_votes > pool.no_votes) {
+        let amount_to_release = balance::value(&pool.pool_escrow.value);
+
+        let funds_to_transfer_balance = balance::split(&mut pool.pool_escrow.value, amount_to_release);
+        let funds_to_transfer_coin = coin::from_balance(funds_to_transfer_balance, ctx);
+
+        transfer::public_transfer(funds_to_transfer_coin, pool.recipient);
+
+        pool.status = POOL_STATUS::RELEASED;
+
+        event::emit(PoolReleasedEvent {
+            pool_id: object::id(pool),
+            receipient: pool.recipient
+        })
+    }else {
+        pool.status = POOL_STATUS::REJECTED;
+    }
+}
+
+public entry fun initialize_pool_refund(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap) {
+    assert!(pool.status == POOL_STATUS::REJECTED, EPoolNotRejected);
+    assert!(pool_initiator_cap.pool_id == object::id(pool));
+
+    pool.status = POOL_STATUS::REFUNDING
+}
+
+#[allow(lint(self_transfer))]
+public entry fun claim_pool_refund(pool: &mut Pool, ctx: &mut TxContext) {
+    let contributors = &mut pool.contributors;
+
+    assert!(table::contains(contributors, ctx.sender()), EAddressNotAContributor);
+
+    let contribution = table::borrow_mut(contributors, ctx.sender());
+    let contribution_amount = *contribution;
+
+    assert!(*contribution > 0, EInvalidContributionAmount);
+
+    *contribution = 0;
+
+    let amount_to_refund_balance = balance::split(&mut pool.pool_escrow.value, contribution_amount); 
+    let amount_to_refund_coin = coin::from_balance(amount_to_refund_balance, ctx);
+
+    transfer::public_transfer(amount_to_refund_coin, ctx.sender());
+
+    event::emit(PoolRefundClaimed {
+        pool_id: object::id(pool),
+        receipient: ctx.sender(),
+        amount: *contribution
+    });
+
+    let remaining_funds = balance::value(&pool.pool_escrow.value);
+
+    if(remaining_funds == 0) {
+        pool.status = POOL_STATUS::REFUNDED
+    }
+}
