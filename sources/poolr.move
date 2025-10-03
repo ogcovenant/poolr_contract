@@ -167,6 +167,18 @@ public fun get_pool_status_type(status: String): POOL_STATUS {
     }
 }
 
+public fun get_pool_status(pool: &Pool): POOL_STATUS{
+    pool.status
+}
+
+public fun get_pool_deadline(pool: &Pool): u64{
+    pool.deadline_timestamp
+}
+
+public fun get_pool_creation(pool: &Pool): u64 {
+    pool.creation_timestamp
+}
+
 public fun get_pool_visibility_type(visibility: String): POOL_VISIBILITY {
     if (visibility != b"PRIVATE".to_string() && visibility != b"PUBLIC".to_string()) {
         abort EInvalidVisibility
