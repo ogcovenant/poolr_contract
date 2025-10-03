@@ -251,7 +251,7 @@ public fun get_pool_contributors(pool: &Pool): &Table<address, u64> {
     &pool.contributors
 }
 
-public entry fun add_contributor_to_pool(
+public fun add_contributor_to_pool(
     pool: &mut Pool,
     user_address: address,
     pool_initiator_cap: &PoolInitiatorCap,
@@ -285,7 +285,7 @@ public fun join_pool(ctx: &mut TxContext, pool: &mut Pool) {
     })
 }
 
-public entry fun initialize_pool_funding(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap,) {
+public fun initialize_pool_funding(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap,) {
     assert!(pool_initiator_cap.pool_id == object::id(pool), EAddressNotPoolInitiator);
     assert!(pool.status == POOL_STATUS::OPEN, ECannotInitializeFundingOnClosedPool);
 
@@ -352,7 +352,7 @@ public fun get_contributed_amount(pool: &Pool): u64 {
     pool.contributed_amount
 }
 
-public entry fun request_pool_release(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap) {
+public fun request_pool_release(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap) {
     assert!(pool_initiator_cap.pool_id == object::id(pool), EAddressNotPoolInitiator);
     assert!(pool.status == POOL_STATUS::FUNDED, EContributedAmountIsLowForThisAction);
 
@@ -375,7 +375,7 @@ public fun get_vote_choice (choice: String): VOTE_CHOICE {
     }
 }
 
-public entry fun vote(pool: &mut Pool, choice: String, ctx: &TxContext) {
+public fun vote(pool: &mut Pool, choice: String, ctx: &TxContext) {
     let voters = &mut pool.voters;
 
     assert!(pool.status == POOL_STATUS::VOTING, EPoolHasNotBeenInitializedForVoting);
@@ -403,7 +403,7 @@ public entry fun vote(pool: &mut Pool, choice: String, ctx: &TxContext) {
     })
 }
 
-public entry fun release_pool_funds(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap, ctx: &mut TxContext) {
+public fun release_pool_funds(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap, ctx: &mut TxContext) {
     assert!(pool_initiator_cap.pool_id == object::id(pool), EAddressNotPoolInitiator);
     assert!(pool.status == POOL_STATUS::VOTING, ECannotReleaseFundsOnOpenPool);
 
@@ -429,7 +429,7 @@ public entry fun release_pool_funds(pool: &mut Pool, pool_initiator_cap: &PoolIn
     }
 }
 
-public entry fun initialize_pool_refund(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap) {
+public fun initialize_pool_refund(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap) {
     assert!(pool.status == POOL_STATUS::REJECTED, EPoolNotRejected);
     assert!(pool_initiator_cap.pool_id == object::id(pool));
 
@@ -437,12 +437,13 @@ public entry fun initialize_pool_refund(pool: &mut Pool, pool_initiator_cap: &Po
 }
 
 #[allow(lint(self_transfer))]
-public entry fun claim_pool_refund(pool: &mut Pool, ctx: &mut TxContext) {
-    let contributors = &mut pool.contributors;
+public fun claim_pool_refund(pool: &mut Pool, ctx: &mut TxContext) {
 
-    assert!(table::contains(contributors, ctx.sender()), EAddressNotAContributor);
+    assert!(table::contains(&pool.contributors, ctx.sender()), EAddressNotAContributor);
 
-    let contribution = table::borrow_mut(contributors, ctx.sender());
+    let pool_id = object::id(pool);
+
+    let contribution = table::borrow_mut(&mut pool.contributors, ctx.sender());
     let contribution_amount = *contribution;
 
     assert!(*contribution > 0, EInvalidContributionAmount);
@@ -455,7 +456,7 @@ public entry fun claim_pool_refund(pool: &mut Pool, ctx: &mut TxContext) {
     transfer::public_transfer(amount_to_refund_coin, ctx.sender());
 
     event::emit(PoolRefundClaimed {
-        pool_id: object::id(pool),
+        pool_id,
         receipient: ctx.sender(),
         amount: *contribution
     });
