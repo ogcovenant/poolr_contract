@@ -364,6 +364,14 @@ public fun get_contributed_amount(pool: &Pool): u64 {
     pool.contributed_amount
 }
 
+public fun get_target_amount(pool: &Pool): u64 {
+    pool.target_amount
+}
+
+public fun get_pool_escrow_value(pool: &Pool): &Balance<USDC> {
+    &pool.pool_escrow.value
+}
+
 public fun request_pool_release(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap) {
     assert!(pool_initiator_cap.pool_id == object::id(pool), EAddressNotPoolInitiator);
     assert!(pool.status == POOL_STATUS::FUNDED, EContributedAmountIsLowForThisAction);
@@ -413,6 +421,22 @@ public fun vote(pool: &mut Pool, choice: String, ctx: &TxContext) {
         voter: ctx.sender(),
         choice
     })
+}
+
+public fun get_pool_voters(pool: &Pool): &Table<address, u64> {
+    &pool.voters
+}
+
+public fun get_yes_votes(pool: &Pool): u64 {
+    pool.yes_votes
+}
+
+public fun get_no_votes(pool: &Pool): u64 {
+    pool.no_votes
+}
+
+public fun get_total_votes(pool: &Pool): u64 {
+    pool.total_votes
 }
 
 public fun release_pool_funds(pool: &mut Pool, pool_initiator_cap: &PoolInitiatorCap, ctx: &mut TxContext) {
