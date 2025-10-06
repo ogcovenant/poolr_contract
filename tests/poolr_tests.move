@@ -8,7 +8,6 @@ use sui::table;
 use sui::coin;
 use usdc::usdc::USDC;
 use sui::balance;
-use std::debug;
 
 const INITIATOR: address = @0xA;
 const ALICE: address = @0xB;
@@ -779,6 +778,85 @@ fun contribution_deadline_enforced() {
     let ctx = ts::ctx(&mut scenario);
     let mut test_clock = clock::create_for_testing(ctx);
     test_clock.increment_for_testing(61 * 24 * 60 * 60 * 1000);
+
+    poolr::contribute_to_pool(bob_contribution, &mut pool, ctx, &test_clock);
+
+    ts::return_shared(pool);
+    test_clock.destroy_for_testing();
+  };
+
+  ts::end(scenario);
+}
+
+#[test, expected_failure(abort_code = 507)]
+fun threshold_contribution_enforced() {
+  let mut scenario = ts::begin(INITIATOR);
+
+  //Create pool with INITIATOR address
+  {
+    let ctx = ts::ctx(&mut scenario);
+    let test_clock = clock::create_for_testing(ctx);
+
+    poolr::create_pool(
+       ctx,
+      b"Test Pool".to_string(),
+      b"Just a test pool".to_string(),
+      BOB,
+      200,
+      70,
+      option::some(100),
+      60,
+      b"PRIVATE".to_string(),
+      &test_clock
+    );
+
+    test_clock.destroy_for_testing()
+  };
+
+  //add BOB and ALICE as pool contributors
+  ts::next_tx(&mut scenario, INITIATOR);
+  {
+    let mut pool = ts::take_shared<poolr::Pool>(&scenario);
+    let pool_initiator_cap = ts::take_from_sender<poolr::PoolInitiatorCap>(&scenario);
+
+    poolr::add_contributor_to_pool(&mut pool, BOB, &pool_initiator_cap);
+    poolr::add_contributor_to_pool(&mut pool, ALICE, &pool_initiator_cap);
+
+    ts::return_shared(pool);
+    ts::return_to_sender(&scenario, pool_initiator_cap);
+  };
+
+  //Create coin object and transfer to ALICE and BOB
+  ts::next_tx(&mut scenario, INITIATOR);
+  {
+    let ctx = ts::ctx(&mut scenario);
+    let mut test_usdc_coin: coin::Coin<USDC> = coin::mint_for_testing<USDC>(200, ctx);
+
+    let alice_coin = coin::split(&mut test_usdc_coin, 110, ctx);
+
+    transfer::public_transfer(alice_coin, ALICE);
+    transfer::public_transfer(test_usdc_coin, BOB)
+  };
+
+  //initialize pool funding
+  ts::next_tx(&mut scenario, INITIATOR);
+  {
+    let mut pool = ts::take_shared<poolr::Pool>(&scenario);
+    let pool_initiator_cap = ts::take_from_sender<poolr::PoolInitiatorCap>(&scenario);
+
+    poolr::initialize_pool_funding(&mut pool, &pool_initiator_cap);
+
+    ts::return_shared(pool);
+    ts::return_to_sender(&scenario, pool_initiator_cap);
+  };
+
+  //Try to add bob contribution below contribution threshold
+  ts::next_tx(&mut scenario, BOB);
+  {
+    let mut pool = ts::take_shared<poolr::Pool>(&scenario);
+    let bob_contribution = ts::take_from_sender<coin::Coin<USDC>>(&scenario);
+    let ctx = ts::ctx(&mut scenario);
+    let test_clock = clock::create_for_testing(ctx);
 
     poolr::contribute_to_pool(bob_contribution, &mut pool, ctx, &test_clock);
 
